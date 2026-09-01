@@ -9,6 +9,20 @@ OMARCHY_SETTINGS_PACKAGE="${OMARCHY_SETTINGS_PACKAGE:-omarchy-settings}"
 
 LOGO_PATH="$OMARCHY_PATH/logo.txt"
 
+# Mirrors archinstall writes into the installed system. Arch proper publishes no
+# aarch64 tree, so ARM installs come from Arch Linux ARM -- which also lays its
+# repos out as $arch/$repo rather than Arch's $repo/os/$arch, so these cannot be
+# the same URLs pointed at a different host. Single-quoted: the $repo and $arch
+# placeholders belong to pacman, and the heredocs below expand only one level, so
+# they survive into the generated config intact.
+if [[ $(uname -m) == "aarch64" ]]; then
+  MIRROR_SERVERS_JSON='            {"url": "http://mirror.archlinuxarm.org/$arch/$repo"}'
+else
+  MIRROR_SERVERS_JSON='            {"url": "https://mirror.omarchy.org/$repo/os/$arch"},
+            {"url": "https://mirror.rackspace.com/archlinux/$repo/os/$arch"},
+            {"url": "https://geo.mirror.pkgbuild.com/$repo/os/$arch"}'
+fi
+
 # The setup form — keyboard, account, hostname, and timezone questions, plus the
 # rules their answers are checked against — shared verbatim with the first-boot
 # owner setup that finishes a deferred install. build-iso.sh vendors it out of
@@ -412,6 +426,13 @@ to_gb() {
 
 # T2 Macs need their own kernel for keyboard/wifi drivers.
 detect_kernel() {
+  # Arch Linux ARM ships no package named plain "linux" -- its generic ARMv8
+  # kernel is linux-aarch64 -- and there are no T2 Macs to probe for on ARM.
+  if [[ $(uname -m) == "aarch64" ]]; then
+    echo "linux-aarch64"
+    return
+  fi
+
   if lspci -nn 2>/dev/null | grep -q "106b:180[12]"; then
     echo "linux-t2"
   else
@@ -837,9 +858,7 @@ run_partition_execute() {
     "mirror_config": {
         "custom_repositories": [],
         "custom_servers": [
-            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
-            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
-            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+$MIRROR_SERVERS_JSON
         ],
         "mirror_regions": {},
         "optional_repositories": []
@@ -1226,9 +1245,7 @@ cat <<-_EOF_ >user_configuration.json
     "mirror_config": {
         "custom_repositories": [],
         "custom_servers": [
-            {"url": "https://mirror.omarchy.org/\$repo/os/\$arch"},
-            {"url": "https://mirror.rackspace.com/archlinux/\$repo/os/\$arch"},
-            {"url": "https://geo.mirror.pkgbuild.com/\$repo/os/\$arch"}
+$MIRROR_SERVERS_JSON
         ],
         "mirror_regions": {},
         "optional_repositories": []

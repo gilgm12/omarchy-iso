@@ -8,8 +8,15 @@ iso_application="Omarchy Installer"
 iso_version="$(date --date="@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y.%m.%d)"
 install_dir="arch"
 buildmodes=('iso')
-bootmodes=('bios.syslinux' 'uefi.grub')
-arch="x86_64"
+arch="${OMARCHY_ARCH:-x86_64}"
+# aarch64 has no BIOS, so syslinux has nothing to boot there; UEFI is the only
+# path on ARM. mkarchiso sources this file with bash, so OMARCHY_ARCH arrives
+# through the environment the builder exports.
+if [[ $arch == "aarch64" ]]; then
+  bootmodes=('uefi.grub')
+else
+  bootmodes=('bios.syslinux' 'uefi.grub')
+fi
 pacman_conf="pacman-offline.conf"
 airootfs_image_type="squashfs"
 # Package archives in the offline mirror are already zstd-compressed. Storing
