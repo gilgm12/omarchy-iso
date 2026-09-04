@@ -106,6 +106,49 @@ while read -r path; do
 done <<<"$referenced"
 pass "$arch: every kernel/initramfs grub.cfg names exists in the image"
 
+# --- device trees and Snapdragon boot arguments ---------------------------
+#
+# aarch64 only. Qualcomm's UEFI is ACPI-only and Linux has no ACPI support for
+# x1e80100, so a Snapdragon X machine boots to a silent black screen without a
+# device tree. builder/build-iso.sh stages one into ISO 9660 out of the same
+# linux-aarch64 package the live root is pacstrapped from -- but grub.cfg guards
+# the entry with -f, so a staging failure is invisible at boot: the menu entry
+# simply is not there. Catch it here instead.
+
+dtbs=$(printf '%s\n' "$grub_cfg" |
+  grep -oE '^[[:space:]]*devicetree[[:space:]]+[^[:space:]]+' | awk '{print $2}' | sort -u || true)
+
+if [[ $arch == aarch64 ]]; then
+  [[ -n $dtbs ]] ||
+    fail "aarch64: grub.cfg loads no devicetree; Snapdragon X machines cannot boot this ISO"
+
+  while read -r path; do
+    [[ -n $path ]] || continue
+    has "${path#/}" ||
+      fail "aarch64: grub.cfg loads $path, absent from the image" \
+        "$(printf '%s\n' "$listing" | grep '^boot/grub/' || true)"
+    # A truncated or zero-length blob passes an existence check and still
+    # black-screens. 0xd00dfeed is the flattened-device-tree magic.
+    # od -N4 exits after four bytes, so bsdtar takes SIGPIPE; under pipefail
+    # that would abort the script rather than report anything.
+    magic=$(bsdtar -xOf "$iso" "${path#/}" 2>/dev/null | od -An -tx1 -N4 | tr -d ' ' || true)
+    [[ $magic == d00dfeed ]] ||
+      fail "aarch64: $path is not a device tree blob (magic $magic, want d00dfeed)"
+  done <<<"$dtbs"
+  pass "aarch64: every devicetree grub.cfg names is present and is a valid FDT"
+
+  # The device tree alone is not enough: without these the clock and
+  # power-domain drivers gate the panel and the USB/PCIe links before their
+  # consumers bind, and the machine has no serial port to report it on.
+  for required in rd.udev.event_timeout=5 clk_ignore_unused pd_ignore_unused efi=noruntime console=tty0; do
+    printf '%s\n' "$grub_cfg" | grep -qF -- "$required" ||
+      fail "aarch64: grub.cfg names no '$required'; the Snapdragon entry would not boot"
+  done
+  pass "aarch64: Snapdragon kernel arguments present"
+elif [[ -n $dtbs ]]; then
+  fail "x86_64: grub.cfg loads a devicetree, which x86 firmware has no use for"
+fi
+
 # --- the live initramfs can actually mount the medium ---------------------
 #
 # The archiso hook is what finds and mounts airootfs.sfs off the boot medium.

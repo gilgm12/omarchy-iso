@@ -9,6 +9,17 @@ OMARCHY_SETTINGS_PACKAGE="${OMARCHY_SETTINGS_PACKAGE:-omarchy-settings}"
 
 LOGO_PATH="$OMARCHY_PATH/logo.txt"
 
+# Name of the limine loader as it will sit on the ESP. Limine ships every
+# architecture's binary in one package, so the installer cannot assume: copying
+# the x86_64 loader onto an ARM64 ESP succeeds and leaves a system the firmware
+# cannot boot. The live ISO installs to the machine it runs on, so uname is the
+# target's architecture. Mirrors efi_binary_name() in the orchestrator's
+# context.py -- change both together.
+case "$(uname -m)" in
+aarch64) OMARCHY_EFI_BINARY="limine_aa64.efi" ;;
+*) OMARCHY_EFI_BINARY="limine_x64.efi" ;;
+esac
+
 # Mirrors archinstall writes into the installed system. Arch proper publishes no
 # aarch64 tree, so ARM installs come from Arch Linux ARM -- which also lays its
 # repos out as $arch/$repo rather than Arch's $repo/os/$arch, so these cannot be
@@ -826,7 +837,7 @@ run_partition_execute() {
         "boot": {
             "esp_mount": "$esp_mount_in_target",
             "esp_path": "/EFI/limine",
-            "efi_binary": "limine_x64.efi",
+            "efi_binary": "$OMARCHY_EFI_BINARY",
             "enable_fallback": false
         },
         "storage": {
@@ -1163,7 +1174,7 @@ cat <<-_EOF_ >user_configuration.json
         "boot": {
             "esp_mount": "/boot",
             "esp_path": "/EFI/limine",
-            "efi_binary": "limine_x64.efi",
+            "efi_binary": "$OMARCHY_EFI_BINARY",
             "enable_fallback": true
         },
         "storage": {

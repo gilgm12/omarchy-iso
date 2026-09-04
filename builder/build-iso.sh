@@ -105,6 +105,14 @@ mkdir -p "$build_cache_dir" "$offline_mirror_dir"
 cp -r /archiso/configs/releng/* "$build_cache_dir/"
 rm "$build_cache_dir/airootfs/etc/motd"
 
+# Keep the hardware catalog inside the live root as well as at build time.
+# The installer uses this same file to configure the installed bootloader, so
+# product matching, DTB staging, and post-install kernel updates cannot drift.
+if [[ $OMARCHY_ARCH == "aarch64" ]]; then
+  install -Dm644 /configs/aarch64/platforms.json \
+    "$build_cache_dir/airootfs/usr/share/omarchy-iso/aarch64-platforms.json"
+fi
+
 # releng only ships packages.x86_64. Derive the aarch64 list from it and drop the
 # entries that are x86-only, or that Arch Linux ARM does not carry at all, so the
 # first pacman resolve does not fail on packages that cannot exist for ARM.
@@ -306,6 +314,14 @@ arch_packages=(git gum jq openssl plymouth ttfx tzupdate omarchy-keyring "$OMARC
 # here for ARM.
 if [[ $OMARCHY_ARCH != "aarch64" ]]; then
   arch_packages=(linux-t2 "${arch_packages[@]}")
+else
+  # Snapdragon laptops (Lenovo ThinkPad X13s and friends) need Qualcomm firmware
+  # loaded before the display controller, GPU, and USB/PCIe links come up. Without
+  # it the kernel boots to a black panel with no console, which is the failure we
+  # are chasing on real hardware -- QEMU never needed it because virtio needs no
+  # blobs. releng's list carries only linux-firmware, which no longer bundles the
+  # qcom blobs since upstream split them out.
+  arch_packages+=(linux-firmware-qcom)
 fi
 printf '%s\n' "${arch_packages[@]}" >> "$pkg_list"
 
@@ -408,6 +424,12 @@ mapfile -t all_packages < <(
     # Always include the selected Omarchy packages so the target install can
     # find the runtime and companion packages in the offline mirror.
     printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" "$OMARCHY_NVIM_PACKAGE"
+    # Platform packages are downloaded into the offline mirror but are not
+    # installed in the live root. The installer selects only the packages for
+    # the machine whose SMBIOS record matched the AArch64 platform manifest.
+    if [[ $OMARCHY_ARCH == "aarch64" ]]; then
+      jq -r '.platforms[].packages[]?' /configs/aarch64/platforms.json
+    fi
   } | sort -u
 )
 
@@ -518,6 +540,68 @@ if (( ${#offline_pkgs[@]} == 0 )); then
 fi
 repo-add "$offline_mirror_dir/offline.db.tar.gz" "${offline_pkgs[@]}"
 
+# aarch64 boot: stage Snapdragon X device trees where GRUB can read them.
+#
+# Qualcomm's UEFI publishes ACPI only, and Linux has no ACPI support for
+# x1e80100 -- it needs a flattened device tree or it dies before any console
+# exists, which is the silent black screen a Yoga Slim 7x shows. GRUB's
+# `devicetree` command installs one into the EFI configuration table, so the
+# blob has to be reachable from the boot medium *before* the kernel is loaded.
+#
+# The DTBs are already on the ISO: linux-aarch64 ships /boot/dtbs/ and the live
+# root carries all 1507 of them. But they are inside the squashfs, which nothing
+# can read at GRUB time, so a second copy is staged outside it.
+#
+# It goes into the profile's grub/ directory rather than the ESP on purpose.
+# mkarchiso's _make_bootmode_uefi.grub copies every non-*.cfg entry of
+# ${profile}/grub/ straight into ISO 9660 at /boot/grub/ with cp -r (see
+# archiso/archiso/mkarchiso, "Copy GRUB files"; shopt -s extglob is set at the
+# top of that script), so this needs no mkarchiso patch. And the FAT ESP is
+# sized for BOOTAA64.EFI alone -- _make_boot_on_fat is not even called on the
+# grub path, so the kernel, initramfs and these blobs all live on ISO 9660.
+#
+# The source is the package file the live root is actually pacstrapped from
+# (pacman-offline.conf's only repo is this mirror, and it has just been pruned
+# to the resolved set), so the staged DTB can never be a different kernel
+# version from the one that boots it.
+if [[ $OMARCHY_ARCH == "aarch64" ]]; then
+  # This is the canonical list of machines whose UEFI does not provide Linux
+  # with a usable hardware description. Do not stage all kernel DTBs: normal
+  # ARM firmware already supplies one, and loading the wrong board's DTB is
+  # unsafe. The manifest will also drive live and installed boot selection.
+  platform_manifest=/configs/aarch64/platforms.json
+  mapfile -t platform_dtbs < <(
+    jq -er '.platforms[] | select(.boot.hardware_description == "dtb-override") | .boot.dtb' \
+      "$platform_manifest" | sort -u
+  )
+  (( ${#platform_dtbs[@]} > 0 )) || {
+    echo "ERROR: no AArch64 platform DTBs in $platform_manifest" >&2
+    exit 1
+  }
+
+  # Anchored on a digit: "linux-aarch64-" also prefixes linux-aarch64-headers.
+  kernel_pkg_file=$(printf '%s\n' "${offline_pkgs[@]}" |
+    grep -E '/linux-aarch64-[0-9]' | head -1)
+  if [[ -z $kernel_pkg_file ]]; then
+    echo "ERROR: no linux-aarch64 package in the offline mirror to take DTBs from" >&2
+    exit 1
+  fi
+
+  dtb_stage_dir="$build_cache_dir/grub/dtbs"
+  mkdir -p "$dtb_stage_dir"
+  bsdtar -xf "$kernel_pkg_file" -C "$dtb_stage_dir" \
+    --strip-components=2 "${platform_dtbs[@]/#/boot/dtbs/}"
+
+  # Fail the build rather than ship an ISO whose Snapdragon entry silently does
+  # not exist: the grub.cfg guard is an -f test, so a missing blob is invisible
+  # at boot -- the menu entry just is not there.
+  for _dtb in "${platform_dtbs[@]}"; do
+    [[ -s "$dtb_stage_dir/$_dtb" ]] ||
+      { echo "ERROR: $_dtb missing from $(basename "$kernel_pkg_file")" >&2; exit 1; }
+  done
+  echo "aarch64: staged ${#platform_dtbs[@]} platform device tree(s) from $(basename "$kernel_pkg_file")"
+fi
+
 # mkarchiso expects the mirror at /var/cache/omarchy/mirror/offline inside the
 # container (the airootfs path); symlink rather than duplicate.
 mkdir -p /var/cache/omarchy/mirror
@@ -613,6 +697,25 @@ if [[ $OMARCHY_ARCH == "aarch64" ]]; then
   # list exists for arm64-efi.
   install -m755 /archiso/archiso/mkarchiso "$build_cache_dir/mkarchiso"
   sed -i -E '/grubmodules=\(/,/zstd\)/ s/\b(at_keyboard|keylayouts|usb|usbserial_common|usbserial_ftdi|usbserial_pl2303|usbserial_usbdebug)\b ?//g' \
+    "$build_cache_dir/mkarchiso"
+
+  # Force a FAT32 ESP.
+  #
+  # archiso sizes the EFI image from its contents plus 8 MiB of slack, then only
+  # asks for FAT32 at >= 36 MiB. On aarch64 the ESP holds BOOTAA64.EFI and
+  # nothing else (_make_boot_on_fat is not called on the grub path -- the kernel
+  # and initramfs are read off ISO 9660), so it lands at 16 MiB and mkfs.fat
+  # picks FAT16.
+  #
+  # The UEFI spec only mandates FAT32 for the ESP on non-removable media, so
+  # that is legal -- but several ARM64 firmwares, Qualcomm's among the
+  # more-reported, simply do not enumerate a FAT16 ESP on removable media. The
+  # stick then never appears as a boot option at all, which looks identical to a
+  # corrupt image.
+  #
+  # Raising the floor to 40 MiB trips archiso's own existing FAT32 branch rather
+  # than duplicating its logic, and costs ~24 MiB of ISO.
+  sed -i -E 's/^(    )if \(\( imgsize_kib >= 36864 \)\); then$/\1(( imgsize_kib < 40960 )) \&\& imgsize_kib=40960\n\1if (( imgsize_kib >= 36864 )); then/' \
     "$build_cache_dir/mkarchiso"
   mkarchiso_bin="$build_cache_dir/mkarchiso"
 else
