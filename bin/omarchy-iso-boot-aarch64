@@ -8,7 +8,7 @@
 #
 # Firmware: Arch Linux ARM does not package edk2-armvirt, so AAVMF is staged
 # from Debian's architecture-independent qemu-efi-aarch64 package into
-# ~/.local/share/aavmf. See alarm-iso.md.
+# ~/.local/share/aavmf. See docs/alarm-iso.md.
 #
 # No KVM here: on Snapdragon X the Gunyah hypervisor owns EL2 and Linux runs at
 # EL1, so this is TCG emulation and boots slowly even on an ARM host.

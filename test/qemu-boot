@@ -21,7 +21,7 @@
 #
 # aarch64 needs UEFI firmware that Arch Linux ARM does not package. Stage it
 # from Debian's architecture-independent qemu-efi-aarch64 into
-# ~/.local/share/aavmf (override with OMARCHY_AAVMF_DIR). See alarm-iso.md.
+# ~/.local/share/aavmf (override with OMARCHY_AAVMF_DIR). See docs/alarm-iso.md.
 
 set -uo pipefail
 
