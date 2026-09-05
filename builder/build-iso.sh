@@ -44,8 +44,23 @@ if [[ -n ${OMARCHY_PKGS_MIRROR:-} || -n ${OMARCHY_BASE_MIRROR:-} ]]; then
   cp "$pacman_online_conf" /tmp/pacman-online.conf
   [[ -n ${OMARCHY_PKGS_MIRROR:-} ]] &&
     sed -i "s|^Server = https://pkgs\.omarchy\.org/.*|Server = ${OMARCHY_PKGS_MIRROR}|" /tmp/pacman-online.conf
-  [[ -n ${OMARCHY_BASE_MIRROR:-} ]] &&
-    sed -i "s|^Server = https\?://[a-z0-9.-]*archlinuxarm\.org/.*|Server = ${OMARCHY_BASE_MIRROR}|" /tmp/pacman-online.conf
+  if [[ -n ${OMARCHY_BASE_MIRROR:-} ]]; then
+    # Replace the complete global fallback set with exactly one pinned server
+    # in each ALARM base repo. Matching hostnames is insufficient now that the
+    # defaults intentionally span archlinuxarm.org and independent HTTPS hosts.
+    awk -v server="$OMARCHY_BASE_MIRROR" '
+      /^\[(core|extra|alarm)\]$/ {
+        in_base = 1
+        print
+        print "Server = " server
+        next
+      }
+      /^\[/ { in_base = 0 }
+      in_base && /^Server = / { next }
+      { print }
+    ' /tmp/pacman-online.conf > /tmp/pacman-online.conf.pinned
+    mv /tmp/pacman-online.conf.pinned /tmp/pacman-online.conf
+  fi
   pacman_online_conf=/tmp/pacman-online.conf
   echo "Mirror overrides applied:"
   grep -E '^\[|^Server' /tmp/pacman-online.conf | sed 's/^/  /'
@@ -89,11 +104,17 @@ pacman-key --lsign-key 40DFB630FF42BCFFB047046CF0134EE680CAC571
 pacman --config "$pacman_online_conf" --noconfirm -Sy omarchy-keyring
 pacman-key --populate omarchy
 
-# Append the [omarchy] repo to the container's /etc/pacman.conf so subsequent
-# tools (notably makepkg in build-omarchy-packages.sh) can resolve omarchy-
-# only build deps like limine-snapper-sync and limine-mkinitcpio-hook.
+# Prepend the [omarchy] repo to the container's /etc/pacman.conf so subsequent
+# tools (notably makepkg in build-omarchy-packages.sh) can resolve Omarchy-only
+# build deps and compatibility overrides. Repository order is package priority
+# in pacman; appending this section would silently select a broken ALARM package
+# with the same name instead of the tested overlay version.
 if ! grep -q '^\[omarchy\]' /etc/pacman.conf; then
-  awk '/^\[omarchy\]/,/^$/' "$pacman_online_conf" >> /etc/pacman.conf
+  {
+    awk '/^\[omarchy\]$/,/^$/' "$pacman_online_conf"
+    cat /etc/pacman.conf
+  } >/tmp/pacman.conf.with-omarchy
+  install -m 0644 /tmp/pacman.conf.with-omarchy /etc/pacman.conf
 fi
 
 # Build locations
@@ -428,6 +449,9 @@ mapfile -t all_packages < <(
     # installed in the live root. The installer selects only the packages for
     # the machine whose SMBIOS record matched the AArch64 platform manifest.
     if [[ $OMARCHY_ARCH == "aarch64" ]]; then
+      # Installed during the early bootstrap so the target trusts ALARM package
+      # signatures before its first network-backed pacman transaction.
+      printf '%s\n' archlinuxarm-keyring
       jq -r '.platforms[].packages[]?' /configs/aarch64/platforms.json
     fi
   } | sort -u
@@ -634,6 +658,7 @@ resolve_expected_packages() {
         "$build_cache_dir/airootfs/usr/share/omarchy-iso/omarchy-base.packages"
       printf '%s\n' "$OMARCHY_RUNTIME_PACKAGE" "$OMARCHY_SETTINGS_PACKAGE" \
         "$OMARCHY_NVIM_PACKAGE"
+      [[ $OMARCHY_ARCH == "aarch64" ]] && printf '%s\n' archlinuxarm-keyring
     } | sort -u | {
       # The shipped omarchy-base.packages is already filtered, but
       # archinstall.packages is read raw here and still names both microcode
@@ -681,7 +706,33 @@ else
   echo "Target install resolves to $expected_packages packages."
 fi
 
-# Live ISO uses the same offline pacman.conf.
+# Preserve the network configuration that the installed aarch64 system should
+# use after every offline install/finalization step is complete. The build can
+# download from a file:// cache, so that override is not automatically suitable
+# for the installed machine; OMARCHY_TARGET_PKGS_MIRROR separates the two. For
+# normal network builds, reuse OMARCHY_PKGS_MIRROR. Otherwise fall back to the
+# channel's tracked public Omarchy URL.
+if [[ $OMARCHY_ARCH == "aarch64" ]]; then
+  target_pkgs_mirror="${OMARCHY_TARGET_PKGS_MIRROR:-${OMARCHY_PKGS_MIRROR:-}}"
+  if [[ $target_pkgs_mirror != http://* && $target_pkgs_mirror != https://* ]]; then
+    target_pkgs_mirror=$(awk '
+      /^\[omarchy\]$/ { in_omarchy=1; next }
+      /^\[/ { in_omarchy=0 }
+      in_omarchy && /^Server = / { sub(/^Server = /, ""); print; exit }
+    ' "/configs/pacman-online-${OMARCHY_MIRROR}-aarch64.conf")
+  fi
+  [[ $target_pkgs_mirror == http://* || $target_pkgs_mirror == https://* ]] ||
+    { echo "ERROR: no HTTP(S) Omarchy repository configured for the installed aarch64 system" >&2; exit 1; }
+
+  install -Dm644 /configs/pacman-target-aarch64.conf \
+    "$build_cache_dir/airootfs/usr/share/omarchy-iso/pacman-target.conf"
+  sed -i "s|@@OMARCHY_PKGS_MIRROR@@|$target_pkgs_mirror|" \
+    "$build_cache_dir/airootfs/usr/share/omarchy-iso/pacman-target.conf"
+  install -Dm644 /configs/mirrorlist-target-aarch64 \
+    "$build_cache_dir/airootfs/usr/share/omarchy-iso/mirrorlist-target"
+fi
+
+# Live ISO uses the offline pacman.conf throughout installation.
 cp "$build_cache_dir/pacman-offline.conf" "$build_cache_dir/airootfs/etc/pacman.conf"
 
 # Build the ISO.

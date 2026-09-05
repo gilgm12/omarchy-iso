@@ -169,6 +169,32 @@ class Aarch64LimineKernelLayoutTest(unittest.TestCase):
         self.assertIn('[[ $_omarchy_module == thunderbolt ]]', compat_text)
         subprocess.run(["bash", "-n", str(compat)], check=True)
 
+    def test_current_limine_modules_builtin_discovery_needs_no_patch(self):
+        hook = self.target / "usr/share/libalpm/scripts/limine-mkinitcpio-install"
+        current_hook = (
+            'process_kernel() {\n'
+            '  local kernel_dir="$1" kernel_name=""\n'
+            '  [[ -f "${kernel_dir}/modules.builtin" ]] || return 0\n'
+            '  kernel_name="$(pacman -Qqo "${kernel_dir}/modules.builtin" '
+            '2>/dev/null)" || return 0\n'
+            '  set_kernel_context "$kernel_dir" "$kernel_name" || return 0\n'
+            '}\n'
+        )
+        hook.write_text(current_hook)
+        modules = self.target / "usr/lib/modules" / self.kver
+        (modules / "modules.builtin").write_text("kernel/drivers/test.ko\n")
+
+        with (
+            mock.patch.object(phases_impl.platform, "machine", return_value="aarch64"),
+            mock.patch.object(phases_impl, "info"),
+        ):
+            phases_impl._prepare_aarch64_limine_kernel_layout(self.ctx)
+
+        self.assertEqual(hook.read_text(), current_hook)
+        self.assertEqual((modules / "pkgbase").read_text(), "linux-aarch64\n")
+        self.assertEqual((modules / "vmlinuz").read_bytes(), b"arm64-kernel-image")
+        subprocess.run(["bash", "-n", str(hook)], check=True)
+
     def test_missing_alarm_image_fails_before_limine_update(self):
         (self.target / "boot/Image").unlink()
 

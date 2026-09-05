@@ -43,6 +43,9 @@ from .ui import error, info
 
 
 AARCH64_PLATFORM_MANIFEST = Path("/usr/share/omarchy-iso/aarch64-platforms.json")
+AARCH64_TARGET_PACMAN_CONF = Path("/usr/share/omarchy-iso/pacman-target.conf")
+AARCH64_TARGET_MIRRORLIST = Path("/usr/share/omarchy-iso/mirrorlist-target")
+LIVE_PACMAN_CONF = Path("/etc/pacman.conf")
 DMI_ID_ROOT = Path("/sys/class/dmi/id")
 
 
@@ -161,6 +164,7 @@ EARLY_BOOTSTRAP_BASE_PACKAGES = [
     "efibootmgr",
     "omarchy-keyring",
 ]
+AARCH64_KEYRING_PACKAGE = "archlinuxarm-keyring"
 
 # Install LuaRocks before omarchy-nvim pulls in lua51-lpeg. Arch's lua-luarocks
 # post_install script tries to rebuild manifests for existing rocks trees before
@@ -174,7 +178,10 @@ EARLY_LUAROCKS_PACKAGES = [
 
 
 def _early_bootstrap_packages() -> list[str]:
-    return [*EARLY_BOOTSTRAP_BASE_PACKAGES, _omarchy_settings_package()]
+    packages = [*EARLY_BOOTSTRAP_BASE_PACKAGES]
+    if platform.machine() == "aarch64":
+        packages.append(AARCH64_KEYRING_PACKAGE)
+    return [*packages, _omarchy_settings_package()]
 
 
 def _early_user_seed_packages() -> list[str]:
@@ -691,6 +698,29 @@ def _install_early_packages(installer) -> None:
     info(f"› installing early Omarchy packages: {', '.join(bootstrap_packages)}")
     installer.add_additional_packages(bootstrap_packages)
 
+    if platform.machine() == "aarch64":
+        # The ISO's offline repository deliberately disables signature checks,
+        # so this package can bootstrap ALARM's trust root without a circular
+        # dependency. Make the post-install result explicit: a missing or
+        # unpopulated keyring must fail the install here, not the user's first
+        # network pacman transaction with an opaque "unknown trust" error.
+        subprocess.run(
+            ["arch-chroot", str(installer.target), "pacman-key", "--init"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "arch-chroot",
+                str(installer.target),
+                "pacman-key",
+                "--populate",
+                "archlinux",
+                "archlinuxarm",
+                "omarchy",
+            ],
+            check=True,
+        )
+
     info(f"› installing LuaRocks prerequisites: {', '.join(EARLY_LUAROCKS_PACKAGES)}")
     installer.add_additional_packages(EARLY_LUAROCKS_PACKAGES)
 
@@ -1074,7 +1104,7 @@ def _prepare_target_setup(ctx: InstallContext) -> None:
     if ctx.state.get("target_setup_prepared"):
         return
 
-    shutil.copy("/etc/pacman.conf", str(ctx.target / "etc" / "pacman.conf"))
+    shutil.copy(LIVE_PACMAN_CONF, ctx.target / "etc" / "pacman.conf")
 
     bind_mounts = [
         ("/var/cache/omarchy/mirror/offline", "/var/cache/omarchy/mirror/offline"),
@@ -1135,6 +1165,11 @@ def _target_user_env(ctx: InstallContext, user: str) -> list[str]:
 
 def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str | None = None) -> None:
     _prepare_target_setup(ctx)
+    # omarchy-apply-system restores the runtime's normal network pacman.conf at
+    # the end of system setup, but user finalization must remain offline too.
+    # Reassert the live ISO config before every target-side setup command. The
+    # final network configuration is installed afterwards.
+    _restore_aarch64_offline_pacman(ctx)
     omarchy_start_time, omarchy_start_epoch = _ensure_finalizer_log_started(ctx)
 
     target_log = ctx.target / "var" / "log" / "omarchy-install.log"
@@ -1194,6 +1229,11 @@ def _run_target_setup_command(ctx: InstallContext, cmd: list[str], *, user: str 
                     live_log.write(target_log.read_text(errors="ignore"))
             except OSError:
                 pass
+
+
+def _restore_aarch64_offline_pacman(ctx: InstallContext) -> None:
+    if platform.machine() == "aarch64" and AARCH64_TARGET_PACMAN_CONF.is_file():
+        shutil.copy(LIVE_PACMAN_CONF, ctx.target / "etc" / "pacman.conf")
 
 
 def run_system_finalizer(ctx: InstallContext) -> None:
@@ -1574,17 +1614,25 @@ def _prepare_aarch64_limine_kernel_layout(ctx: InstallContext) -> None:
 
     _write_aarch64_mkinitcpio_module_compat(ctx)
 
-    # limine-mkinitcpio-install normally rejects generated pkgbase files: its
+    # limine-mkinitcpio-hook <= 1.36 rejects generated pkgbase files: its
     # process_kernel() insists `pacman -Qqo` owns the marker before it calls
     # set_kernel_context().  linux-aarch64 cannot satisfy that rule because its
     # package contains no pkgbase at all.  Permit this one generated marker only
     # when the corresponding kernel package is installed; all other unowned
     # markers retain the upstream rejection behavior.
+    #
+    # Version 1.38 discovers the package from its owned modules.builtin instead.
+    # That works for linux-aarch64 without modifying the hook, while our vmlinuz
+    # bridge above still supplies the kernel image at the path Limine consumes.
     hook = ctx.target / "usr/share/libalpm/scripts/limine-mkinitcpio-install"
     if not hook.exists():
         raise RuntimeError(f"Limine mkinitcpio hook missing: {hook}")
 
     marker = 'pacman -Qqo "$pkgbase_file" &>/dev/null || return 0'
+    modules_builtin_marker = (
+        'kernel_name="$(pacman -Qqo "${kernel_dir}/modules.builtin" 2>/dev/null)" '
+        '|| return 0'
+    )
     replacement = """\
 if ! pacman -Qqo "$pkgbase_file" &>/dev/null; then
 	[[ $(<"$pkgbase_file") == "linux-aarch64" ]] &&
@@ -1592,11 +1640,12 @@ if ! pacman -Qqo "$pkgbase_file" &>/dev/null; then
 fi"""
     hook_text = hook.read_text()
     if replacement not in hook_text:
-        if marker not in hook_text:
+        if marker in hook_text:
+            hook.write_text(hook_text.replace(marker, replacement, 1))
+        elif modules_builtin_marker not in hook_text:
             raise RuntimeError(
-                f"cannot add linux-aarch64 support: ownership check not found in {hook}"
+                f"cannot add linux-aarch64 support: kernel ownership check not recognized in {hook}"
             )
-        hook.write_text(hook_text.replace(marker, replacement, 1))
 
 
 def _write_aarch64_mkinitcpio_module_compat(ctx: InstallContext) -> None:
@@ -1684,6 +1733,26 @@ def run_chroot_finalizer(ctx: InstallContext) -> None:
         ["/usr/bin/omarchy-provision-user", "--force", "--first-install"],
         user=ctx.username,
     )
+
+
+def configure_package_repositories(ctx: InstallContext) -> None:
+    """Switch an installed aarch64 system from the ISO mirror to ALARM.
+
+    This build-stamped config can use a temporary package repository such as
+    the Snapdragon bootstrap. Later Omarchy package refreshes deliberately
+    replace that URL from their aarch64 template while retaining ALARM repos.
+    """
+    if platform.machine() != "aarch64":
+        return
+
+    source_conf = AARCH64_TARGET_PACMAN_CONF
+    source_mirrorlist = AARCH64_TARGET_MIRRORLIST
+    if not source_conf.is_file() or not source_mirrorlist.is_file():
+        raise RuntimeError("aarch64 target package repository configuration is missing")
+
+    (ctx.target / "etc" / "pacman.d").mkdir(parents=True, exist_ok=True)
+    shutil.copy(source_conf, ctx.target / "etc" / "pacman.conf")
+    shutil.copy(source_mirrorlist, ctx.target / "etc" / "pacman.d" / "mirrorlist")
 
 
 def configure_dns_resolver(ctx: InstallContext) -> None:

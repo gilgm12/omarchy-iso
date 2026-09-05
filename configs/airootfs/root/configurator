@@ -27,7 +27,11 @@ esac
 # placeholders belong to pacman, and the heredocs below expand only one level, so
 # they survive into the generated config intact.
 if [[ $(uname -m) == "aarch64" ]]; then
-  MIRROR_SERVERS_JSON='            {"url": "http://mirror.archlinuxarm.org/$arch/$repo"}'
+  MIRROR_SERVERS_JSON='            {"url": "https://cdnmirror.com/archlinuxarm/$arch/$repo"},
+            {"url": "https://mirrors.dotsrc.org/archlinuxarm/$arch/$repo"},
+            {"url": "https://de3.mirror.archlinuxarm.org/$arch/$repo"},
+            {"url": "https://ca.us.mirror.archlinuxarm.org/$arch/$repo"},
+            {"url": "https://fl.us.mirror.archlinuxarm.org/$arch/$repo"}'
 else
   MIRROR_SERVERS_JSON='            {"url": "https://mirror.omarchy.org/$repo/os/$arch"},
             {"url": "https://mirror.rackspace.com/archlinux/$repo/os/$arch"},

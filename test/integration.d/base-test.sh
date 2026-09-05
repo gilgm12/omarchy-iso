@@ -32,7 +32,11 @@ case "$(basename "$ISO")" in
   OVMF_VARS_TEMPLATE="$FIRMWARE_DIR/AAVMF_VARS.fd"
   GUEST_KERNEL=linux-aarch64
   GUEST_EFI_BINARY=limine_aa64.efi
-  MIRROR_SERVERS_JSON='            {"url": "http://mirror.archlinuxarm.org/$arch/$repo"}'
+  MIRROR_SERVERS_JSON='            {"url": "https://cdnmirror.com/archlinuxarm/$arch/$repo"},
+            {"url": "https://mirrors.dotsrc.org/archlinuxarm/$arch/$repo"},
+            {"url": "https://de3.mirror.archlinuxarm.org/$arch/$repo"},
+            {"url": "https://ca.us.mirror.archlinuxarm.org/$arch/$repo"},
+            {"url": "https://fl.us.mirror.archlinuxarm.org/$arch/$repo"}'
   ;;
 *x86_64*)
   GUEST_ARCH=x86_64

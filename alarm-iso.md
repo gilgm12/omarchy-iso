@@ -21,14 +21,17 @@ one is present and skips otherwise, so `test/all` stays fast and VM-free.
 ```bash
 cd ~/Projects/omarchy-iso
 OMARCHY_PKGS_MIRROR='https://snapdragon-omarchy.mattgilg.com/aarch64' \
-OMARCHY_BASE_MIRROR='http://fl.us.mirror.archlinuxarm.org/$arch/$repo' \
 OMARCHY_EXTRA_PKGBUILDS='tzupdate tensaku hyprland-preview-share-picker' \
   ./bin/omarchy-iso-make --arch aarch64 --keep-pkg-cache --no-boot-offer \
     --local-source ../omarchy ../omarchy-pkgs
 ```
 
-Single-quote both mirror variables — they contain `$arch` / `$repo`, which are
-pacman's placeholders and must reach the config unexpanded.
+The tracked aarch64 configs use a global HTTPS mirror set: a CDN first, then
+independent mirrors in Denmark, Germany, California, and Florida. The ALARM
+GeoIP hostname is deliberately absent because its certificate does not cover
+`mirror.archlinuxarm.org`. Set `OMARCHY_BASE_MIRROR` only when a build must pin
+every base repository to one server; single-quote its value so pacman's `$arch`
+/ `$repo` placeholders reach the config unexpanded.
 
 `--keep-pkg-cache` is not optional in practice. Without it, `omarchy-iso-make`
 runs `sudo rm -rf /var/cache/pacman/pkg/*` against the **host**, which (a) needs
@@ -69,9 +72,10 @@ publishes the repo.
 ALARM's layout is **not** Arch's `$repo/os/$arch`, and has no `/os/` component:
 
 ```
-http://fl.us.mirror.archlinuxarm.org/aarch64/core/core.db    200
-http://fl.us.mirror.archlinuxarm.org/aarch64/alarm/alarm.db  200
-https://mirror.archlinuxarm.org/core/os/aarch64/core.db      fails
+https://fl.us.mirror.archlinuxarm.org/aarch64/core/core.db    200
+https://fl.us.mirror.archlinuxarm.org/aarch64/alarm/alarm.db  200
+https://mirror.archlinuxarm.org/aarch64/core/core.db          TLS hostname failure
+https://mirror.archlinuxarm.org/core/os/aarch64/core.db       wrong layout
 https://pkgs.omarchy.org/stable/aarch64/omarchy.db           404
 ```
 
@@ -228,15 +232,15 @@ gaps produce a silently-broken artifact rather than a build error.
 
 ## Design note: mirrors stay out of tracked files
 
-The tracked configs name the **public** defaults (`pkgs.omarchy.org`,
-`mirror.archlinuxarm.org`). The private bucket and the Florida mirror are supplied
-per-build through `OMARCHY_PKGS_MIRROR` / `OMARCHY_BASE_MIRROR`.
+The tracked configs name **public** defaults: `pkgs.omarchy.org` plus a global
+set of ALARM-compatible HTTPS mirrors. The GeoIP redirector is not included:
+ALARM publishes it as HTTP, while forcing HTTPS fails hostname validation. The
+private package bucket is supplied per build through `OMARCHY_PKGS_MIRROR`.
 
 This means no tracked file names a personal mirror, so nothing has to be stripped
 before upstreaming, and this branch works for anyone else the moment
-`pkgs.omarchy.org` publishes an aarch64 tree. The Florida mirror in particular is
-a geographic preference, not a sensible upstream default, so it stays in the
-environment.
+`pkgs.omarchy.org` publishes an aarch64 tree. `OMARCHY_BASE_MIRROR` remains an
+escape hatch for pinning a build to a single ALARM mirror.
 
 `efiboot/loader/entries/` is worth understanding before editing: the
 `uefi.grub` bootmode **validates** that the directory exists and holds at least

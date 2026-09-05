@@ -42,7 +42,7 @@ if [[ -z $iso || ! -f $iso ]]; then
   exit 0
 fi
 
-for tool in bsdtar; do
+for tool in bsdtar unsquashfs; do
   command -v "$tool" >/dev/null || fail "$tool is required"
 done
 
@@ -83,6 +83,52 @@ pass "$arch: no foreign EFI loader"
 has "arch/$arch/airootfs.sfs" ||
   fail "$arch: missing arch/$arch/airootfs.sfs"
 pass "$arch: squashfs root present"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# --- installer and installed-package compatibility ------------------------
+#
+# A successful ISO build does not exercise the installer against the package
+# scripts embedded in its own live root. limine-mkinitcpio-hook 1.38 replaced
+# its pkgbase ownership check with modules.builtin discovery; an installer that
+# only knows the old anchor boots normally, installs the whole OS, then fails at
+# final bootloader setup. Check the actual pair shipped in the artifact.
+
+bsdtar -xOf "$iso" "arch/$arch/airootfs.sfs" >"$work/airootfs.sfs" 2>/dev/null ||
+  fail "$arch: cannot extract live root from image"
+
+installer_impl=$(unsquashfs -cat "$work/airootfs.sfs" \
+  usr/share/omarchy-iso/orchestrator/phases_impl.py 2>/dev/null) ||
+  fail "$arch: installer implementation missing from live root"
+
+limine_package=$(unsquashfs -ll "$work/airootfs.sfs" 2>/dev/null |
+  awk '$NF ~ /\/limine-mkinitcpio-hook-[^/]+\.pkg\.tar\.(zst|xz)$/ {
+    package = $NF
+  }
+  END {
+    sub(/^squashfs-root\//, "", package)
+    print package
+  }')
+[[ -n $limine_package ]] ||
+  fail "$arch: Limine mkinitcpio package missing from offline mirror"
+unsquashfs -cat "$work/airootfs.sfs" "$limine_package" \
+  >"$work/limine-mkinitcpio-hook.pkg.tar" 2>/dev/null ||
+  fail "$arch: cannot extract Limine mkinitcpio package from live root"
+limine_hook=$(bsdtar -xOf "$work/limine-mkinitcpio-hook.pkg.tar" \
+  usr/share/libalpm/scripts/limine-mkinitcpio-install 2>/dev/null) ||
+  fail "$arch: Limine mkinitcpio hook missing from offline package"
+
+if printf '%s\n' "$limine_hook" | grep -qF 'kernel_dir}/modules.builtin'; then
+  printf '%s\n' "$installer_impl" | grep -qF 'modules_builtin_marker' ||
+    fail "$arch: installer does not recognize the embedded Limine modules.builtin hook"
+elif printf '%s\n' "$limine_hook" | grep -qF 'pacman -Qqo "$pkgbase_file"'; then
+  printf '%s\n' "$installer_impl" | grep -qF 'pkgbase_file' ||
+    fail "$arch: installer does not recognize the embedded Limine pkgbase hook"
+else
+  fail "$arch: embedded Limine kernel discovery mechanism is unknown"
+fi
+pass "$arch: installer recognizes the embedded Limine kernel hook"
 
 # --- boot configs point at files that exist -------------------------------
 #
@@ -163,9 +209,6 @@ if ! command -v lsinitcpio >/dev/null; then
   skip "$arch: initramfs carries the archiso hook" "lsinitcpio not installed"
   exit 0
 fi
-
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
 
 bsdtar -xOf "$iso" "$initramfs_path" >"$work/initramfs.img" 2>/dev/null ||
   fail "$arch: cannot extract $initramfs_path"
