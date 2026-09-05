@@ -47,7 +47,7 @@ needed between kernel entry and encrypted-root unlock must be made explicit.
 
 | Platform | Hardware description | Declared coverage | Physical validation |
 | --- | --- | --- | --- |
-| Lenovo Yoga Slim 7x (83ED) | Explicit `x1e80100` DTB | DTB, Qualcomm package, pre-LUKS display/input/watchdog/retimer modules, dynamic GPU firmware | Installed OS boots after blind LUKS unlock; PS8830 retimer omission was confirmed to block pre-LUKS DRM, and the corrected image awaits physical validation |
+| Lenovo Yoga Slim 7x (83ED) | Explicit `x1e80100` DTB | DTB, Qualcomm package, pre-LUKS display/input/watchdog/retimer modules, dynamic GPU firmware | Full encrypted installation validated: the corrected initramfs renders the Plymouth LUKS prompt, Limine finalization completes, and the installed OS boots successfully |
 | NVIDIA DGX Spark | Firmware | NVIDIA runtime and DKMS packages only | Early-boot dependency audit and physical installation are not complete |
 | ASUS Ascent GX10 | Firmware | NVIDIA runtime and DKMS packages only | Early-boot dependency audit and physical installation are not complete |
 
@@ -269,5 +269,5 @@ Observed on physical hardware on 2026-09-03:
 6. The production entry retains early KMS and the branded Plymouth unlock. It
    explicitly includes the MSM display stack, PS8830 retimer bridge, I2C
    keyboard, SBSA watchdog, and the three dynamically selected GPU firmware
-   files. The remaining physical check is that this corrected early-KMS image
-   renders the unlock prompt.
+   files. On 2026-09-05, a full encrypted installation rendered the unlock
+   prompt, completed Limine finalization, and booted successfully.
