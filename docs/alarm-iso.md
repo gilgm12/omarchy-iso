@@ -188,7 +188,7 @@ gaps produce a silently-broken artifact rather than a build error.
 - Prunes the wrong-arch efiboot entry, points `loader.conf` at the right one,
   removes the syslinux tree, rewrites GRUB kernel filenames, drops the Intel
   `xe.enable_panel_replay` parameter.
-- Selects `pacman-online-<channel>-aarch64.conf`; applies mirror overrides to a
+- Selects `aarch64/pacman-online-<channel>.conf`; applies mirror overrides to a
   writable copy (`/configs` is mounted read-only).
 - Accepts xz **or** zstd packages; `repo-add` now errors on an empty mirror
   instead of silently indexing nothing.
@@ -224,7 +224,7 @@ gaps produce a silently-broken artifact rather than a build error.
 
 ### New files
 - `configs/efiboot/loader/entries/01-archiso-aarch64-linux.conf`
-- `configs/pacman-online-{stable,rc,edge}-aarch64.conf`
+- `configs/aarch64/pacman-online-{stable,rc,edge}.conf`
 - `builder/aarch64-excludes.packages`
 - `test/unit/iso-structure-test.sh`
 

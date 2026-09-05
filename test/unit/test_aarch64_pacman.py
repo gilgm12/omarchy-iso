@@ -8,10 +8,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "builder/build-iso.sh"
-TARGET_CONF = ROOT / "configs/pacman-target-aarch64.conf"
-TARGET_MIRRORLIST = ROOT / "configs/mirrorlist-target-aarch64"
+TARGET_CONF = ROOT / "configs/aarch64/pacman-target.conf"
+TARGET_MIRRORLIST = ROOT / "configs/aarch64/mirrorlist-target"
 ONLINE_CONFIGS = [
-    ROOT / f"configs/pacman-online-{channel}-aarch64.conf"
+    ROOT / f"configs/aarch64/pacman-online-{channel}.conf"
     for channel in ("stable", "rc", "edge")
 ]
 
@@ -50,6 +50,15 @@ class Aarch64PacmanTests(unittest.TestCase):
         self.assertIn("cat /etc/pacman.conf", builder)
         self.assertIn(">/tmp/pacman.conf.with-omarchy", builder)
         self.assertNotIn(">> /etc/pacman.conf", builder)
+
+    def test_builder_reads_architecture_specific_configs_from_aarch64_directory(self):
+        builder = BUILDER.read_text()
+        self.assertIn(
+            'pacman_online_conf="/configs/aarch64/pacman-online-${OMARCHY_MIRROR}.conf"',
+            builder,
+        )
+        self.assertIn("/configs/aarch64/pacman-target.conf", builder)
+        self.assertIn("/configs/aarch64/mirrorlist-target", builder)
 
     def test_target_uses_global_https_mirror_set(self):
         servers = [

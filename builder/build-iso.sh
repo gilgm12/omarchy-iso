@@ -30,7 +30,7 @@ export OMARCHY_ARCH
 # both differ from Arch's, so it gets its own pacman configs rather than the
 # x86_64 ones aimed at another host.
 if [[ $OMARCHY_ARCH == "aarch64" ]]; then
-  pacman_online_conf="/configs/pacman-online-${OMARCHY_MIRROR}-aarch64.conf"
+  pacman_online_conf="/configs/aarch64/pacman-online-${OMARCHY_MIRROR}.conf"
 else
   pacman_online_conf="/configs/pacman-online-${OMARCHY_MIRROR}.conf"
 fi
@@ -719,16 +719,16 @@ if [[ $OMARCHY_ARCH == "aarch64" ]]; then
       /^\[omarchy\]$/ { in_omarchy=1; next }
       /^\[/ { in_omarchy=0 }
       in_omarchy && /^Server = / { sub(/^Server = /, ""); print; exit }
-    ' "/configs/pacman-online-${OMARCHY_MIRROR}-aarch64.conf")
+    ' "/configs/aarch64/pacman-online-${OMARCHY_MIRROR}.conf")
   fi
   [[ $target_pkgs_mirror == http://* || $target_pkgs_mirror == https://* ]] ||
     { echo "ERROR: no HTTP(S) Omarchy repository configured for the installed aarch64 system" >&2; exit 1; }
 
-  install -Dm644 /configs/pacman-target-aarch64.conf \
+  install -Dm644 /configs/aarch64/pacman-target.conf \
     "$build_cache_dir/airootfs/usr/share/omarchy-iso/pacman-target.conf"
   sed -i "s|@@OMARCHY_PKGS_MIRROR@@|$target_pkgs_mirror|" \
     "$build_cache_dir/airootfs/usr/share/omarchy-iso/pacman-target.conf"
-  install -Dm644 /configs/mirrorlist-target-aarch64 \
+  install -Dm644 /configs/aarch64/mirrorlist-target \
     "$build_cache_dir/airootfs/usr/share/omarchy-iso/mirrorlist-target"
 fi
 
