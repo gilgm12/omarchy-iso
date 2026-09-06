@@ -98,18 +98,35 @@ trap 'rm -rf "$work"' EXIT
 bsdtar -xOf "$iso" "arch/$arch/airootfs.sfs" >"$work/airootfs.sfs" 2>/dev/null ||
   fail "$arch: cannot extract live root from image"
 
+# The releng profile normally blocks sysinit.target on NTP. On machines that
+# boot before networking is usable this presents as a static cursor for roughly
+# two minutes before tty1 and the configurator appear. Time synchronization
+# itself must remain enabled; only its synchronous boot gate is removed.
+unsquashfs -ll "$work/airootfs.sfs" >"$work/live-root.list" 2>/dev/null ||
+  fail "$arch: cannot list live root"
+
+if grep -Fq '/etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service' \
+  "$work/live-root.list"; then
+  fail "$arch: live boot still blocks on systemd-time-wait-sync"
+fi
+pass "$arch: live boot does not block on NTP"
+
+grep -Fq '/etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service' \
+  "$work/live-root.list" ||
+  fail "$arch: asynchronous systemd-timesyncd enablement is missing"
+pass "$arch: asynchronous clock synchronization remains enabled"
+
 installer_impl=$(unsquashfs -cat "$work/airootfs.sfs" \
   usr/share/omarchy-iso/orchestrator/phases_impl.py 2>/dev/null) ||
   fail "$arch: installer implementation missing from live root"
 
-limine_package=$(unsquashfs -ll "$work/airootfs.sfs" 2>/dev/null |
-  awk '$NF ~ /\/limine-mkinitcpio-hook-[^/]+\.pkg\.tar\.(zst|xz)$/ {
+limine_package=$(awk '$NF ~ /\/limine-mkinitcpio-hook-[^/]+\.pkg\.tar\.(zst|xz)$/ {
     package = $NF
   }
   END {
     sub(/^squashfs-root\//, "", package)
     print package
-  }')
+  }' "$work/live-root.list")
 [[ -n $limine_package ]] ||
   fail "$arch: Limine mkinitcpio package missing from offline mirror"
 unsquashfs -cat "$work/airootfs.sfs" "$limine_package" \

@@ -154,6 +154,16 @@ rm -rf "$build_cache_dir/airootfs/etc/systemd/system/multi-user.target.wants/ref
 rm -rf "$build_cache_dir/airootfs/etc/systemd/system/reflector.service.d"
 rm -rf "$build_cache_dir/airootfs/etc/xdg/reflector"
 
+# Do not make the live console wait for wall-clock synchronization. Archiso's
+# releng profile enables systemd-time-wait-sync in sysinit.target, and on an
+# isolated or slow-to-associate machine that leaves tty1 displaying only a
+# cursor until NTP succeeds or times out. The installer uses its bundled,
+# unsigned offline repository and initializes the installed system's keyrings
+# explicitly, so its correctness does not depend on the live clock being
+# synchronized. Keep systemd-timesyncd enabled: it can correct the clock in the
+# background without holding the configurator behind time-sync.target.
+rm -f "$build_cache_dir/airootfs/etc/systemd/system/sysinit.target.wants/systemd-time-wait-sync.service"
+
 # Bring in our archiso profile additions.
 cp -r /configs/* "$build_cache_dir/"
 
